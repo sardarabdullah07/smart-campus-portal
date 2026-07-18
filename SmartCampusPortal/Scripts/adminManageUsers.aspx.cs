@@ -85,7 +85,8 @@ namespace SmartCampusPortal
                     SqlCommand cmd = new SqlCommand("INSERT INTO Users (FullName, Email, Password, Role) VALUES (@FullName, @Email, @Password, @Role); SELECT SCOPE_IDENTITY();", con);
                     cmd.Parameters.AddWithValue("@FullName", fullName);
                     cmd.Parameters.AddWithValue("@Email", email);
-                    cmd.Parameters.AddWithValue("@Password", password);
+                    // Never store the plaintext - hash with a per-user random salt.
+                    cmd.Parameters.AddWithValue("@Password", PasswordHasher.Hash(password));
                     cmd.Parameters.AddWithValue("@Role", role);
 
                     int newUserId = Convert.ToInt32(cmd.ExecuteScalar());

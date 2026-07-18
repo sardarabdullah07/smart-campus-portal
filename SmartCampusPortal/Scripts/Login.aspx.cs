@@ -9,6 +9,15 @@ namespace SmartCampusPortal
 {
     public partial class Login : Page
     {
+        /// <summary>
+        /// A real PBKDF2 hash of a random throwaway secret, used only when the
+        /// submitted email matches no row. Verifying against it burns the same
+        /// 100,000 iterations a genuine account would, so response time does not
+        /// reveal whether an email exists. It cannot match any user's password.
+        /// </summary>
+        private const string DummyHash =
+            "v1:100000:hnypK5zJ8CeCB/svjT2K3Q==:UDxslIN8UrDkZwakL6XMbTZX5ZSiIcGqZ0cjUErDdD8=";
+
         protected void Page_Load(object sender, EventArgs e)
         {
             if (!IsPostBack)
@@ -35,44 +44,87 @@ namespace SmartCampusPortal
             try
             {
                 string connectionString = ConfigurationManager.ConnectionStrings["SmartCampusPortalConnection"].ConnectionString;
+
+                string role = null;
+                string userId = null;
+                string fullName = null;
+                string storedPassword = null;
+
                 using (SqlConnection con = new SqlConnection(connectionString))
                 {
-                    string query = "SELECT UserID, FullName, Role FROM Users WHERE Email = @Email AND Password = @Password";
+                    // The password can no longer be matched in SQL: every row carries its
+                    // own salt, so the hash is verified in C# after the row is fetched.
+                    string query = "SELECT UserID, FullName, Role, Password FROM Users WHERE Email = @Email";
                     using (SqlCommand cmd = new SqlCommand(query, con))
                     {
                         cmd.Parameters.AddWithValue("@Email", email);
-                        cmd.Parameters.AddWithValue("@Password", password);
                         con.Open();
-                        SqlDataReader reader = cmd.ExecuteReader();
-
-                        if (reader.Read())
+                        using (SqlDataReader reader = cmd.ExecuteReader())
                         {
-                            string role = reader["Role"].ToString();
-                            string userId = reader["UserID"].ToString();
-                            string fullName = reader["FullName"].ToString();
-
-                            FormsAuthenticationTicket ticket = new FormsAuthenticationTicket(
-                                1, // version
-                                email, // user name
-                                DateTime.Now, // creation
-                                DateTime.Now.AddMinutes(30), // expiration
-                                false, // persistent
-                                role // user data (roles)
-                            );
-
-                            string encryptedTicket = FormsAuthentication.Encrypt(ticket);
-                            Response.Cookies.Add(new System.Web.HttpCookie(FormsAuthentication.FormsCookieName, encryptedTicket));
-
-                            Session["UserID"] = userId;
-                            Session["FullName"] = fullName;
-                            Session["UserRole"] = role;
-
-                            RedirectUser(role);
+                            if (reader.Read())
+                            {
+                                role = reader["Role"].ToString();
+                                userId = reader["UserID"].ToString();
+                                fullName = reader["FullName"].ToString();
+                                storedPassword = reader["Password"].ToString();
+                            }
                         }
-                        else
+                    }
+
+                    bool needsUpgrade = false;
+                    bool passwordOk;
+
+                    if (storedPassword == null)
+                    {
+                        // Unknown email. Still run a full PBKDF2 derivation against a dummy
+                        // hash so that a nonexistent account costs the same wall-clock time
+                        // as a wrong password, and does not leak which emails are registered.
+                        PasswordHasher.Verify(password, DummyHash, out needsUpgrade);
+                        needsUpgrade = false;
+                        passwordOk = false;
+                    }
+                    else
+                    {
+                        passwordOk = PasswordHasher.Verify(password, storedPassword, out needsUpgrade);
+                    }
+
+                    if (passwordOk)
+                    {
+                        // Transparent migration: the row still held a plaintext password,
+                        // so replace it with a real salted hash now that we know it is valid.
+                        if (needsUpgrade)
                         {
-                            litMessage.Text = "<div class='alert alert-danger mt-3'>Invalid email or password.</div>";
+                            using (SqlCommand upgradeCmd = new SqlCommand(
+                                "UPDATE Users SET Password = @Password WHERE UserID = @UserID", con))
+                            {
+                                upgradeCmd.Parameters.AddWithValue("@Password", PasswordHasher.Hash(password));
+                                upgradeCmd.Parameters.AddWithValue("@UserID", Convert.ToInt32(userId));
+                                upgradeCmd.ExecuteNonQuery();
+                            }
                         }
+
+                        FormsAuthenticationTicket ticket = new FormsAuthenticationTicket(
+                            1, // version
+                            email, // user name
+                            DateTime.Now, // creation
+                            DateTime.Now.AddMinutes(30), // expiration
+                            false, // persistent
+                            role // user data (roles)
+                        );
+
+                        string encryptedTicket = FormsAuthentication.Encrypt(ticket);
+                        Response.Cookies.Add(new System.Web.HttpCookie(FormsAuthentication.FormsCookieName, encryptedTicket));
+
+                        Session["UserID"] = userId;
+                        Session["FullName"] = fullName;
+                        Session["UserRole"] = role;
+
+                        RedirectUser(role);
+                    }
+                    else
+                    {
+                        // Identical message for "no such email" and "wrong password".
+                        litMessage.Text = "<div class='alert alert-danger mt-3'>Invalid email or password.</div>";
                     }
                 }
             }

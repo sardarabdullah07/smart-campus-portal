@@ -23,7 +23,9 @@ USE SmartCampusDB;
 CREATE TABLE Users (
     UserID INT PRIMARY KEY IDENTITY(1,1),
     Email NVARCHAR(100) UNIQUE NOT NULL,
-    Password NVARCHAR(100) NOT NULL,
+    -- Stores a salted PBKDF2 hash in the form v1:<iterations>:<base64 salt>:<base64 hash>
+    -- (~90 characters); 255 leaves headroom for future parameter changes.
+    Password NVARCHAR(255) NOT NULL,
     FullName NVARCHAR(100) NOT NULL,
     Role NVARCHAR(20) NOT NULL CHECK (Role IN ('Student', 'Faculty', 'Admin'))
 );
@@ -124,10 +126,15 @@ CREATE TABLE Announcements (
 );
 
 -- Sample Users
+-- The demo password for all three accounts is: pass123
+-- Passwords are stored as salted PBKDF2-SHA256 hashes (100,000 iterations,
+-- 16-byte salt, 32-byte subkey) in the format v1:<iterations>:<salt>:<hash>.
+-- Each row has its OWN random salt, so the three hashes differ even though the
+-- underlying password is identical. Use 'pass123' on the Login page as normal.
 INSERT INTO Users (Email, Password, FullName, Role) VALUES
-('student1@campus.edu', 'pass123', 'Student One', 'Student'),
-('faculty1@campus.edu', 'pass123', 'Faculty One', 'Faculty'),
-('admin1@campus.edu', 'pass123', 'Admin One', 'Admin');
+('student1@campus.edu', 'v1:100000:HtSkSwwSxjYVTsZMmODHhQ==:uhtSLsK5RwbfBQ7tE1EZ9sn+62l8khfEH7Fvjjvb8X8=', 'Student One', 'Student'),
+('faculty1@campus.edu', 'v1:100000:GLvEDzrFvDD0Nf8RB8oF4w==:+qSj+EMYAEngPWHO3vGhfn4Xikhad7LAr9+FP9kV6c8=', 'Faculty One', 'Faculty'),
+('admin1@campus.edu', 'v1:100000:Dpy4ALF/DteD3HcDvfgDhQ==:TIzZBYXyDgVR4sFzp1oW85bjy01g7giw2x5mUCUtxHU=', 'Admin One', 'Admin');
 
 -- Corresponding entries in Students and Faculty
 INSERT INTO Students (StudentID, Department, EnrollmentDate) VALUES (1, 'Computer Science', '2022-08-01');
